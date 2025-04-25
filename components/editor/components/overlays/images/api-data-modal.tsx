@@ -2,7 +2,7 @@
 /* eslint-disable @typescript-eslint/no-unused-vars */
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
-import { ImageIcon, Loader2, Plus } from "lucide-react";
+import { ImageIcon, Loader2, Plus, RefreshCcw } from "lucide-react";
 import { useState, useEffect, useRef } from "react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -20,7 +20,13 @@ import Image from "next/image";
 import { useEditorContext } from "../../../contexts/editor-context";
 import { useTimelinePositioning } from "../../../hooks/use-timeline-positioning";
 import { useAspectRatio } from "../../../hooks/use-aspect-ratio";
-import { Overlay, OverlayType, SoundOverlay } from "../../../types";
+import {
+  Caption,
+  CaptionOverlay,
+  Overlay,
+  OverlayType,
+  SoundOverlay,
+} from "../../../types";
 import { useTimeline } from "../../../contexts/timeline-context";
 
 // Define cache type
@@ -37,6 +43,7 @@ interface ExtendedShot extends Shot {
   audioUrl: string; // Audio URL for voice-over or sound
   imageUrl: string;
   videoUrl: string;
+  content: string;
 }
 
 // Global cache to persist data across modal instances
@@ -46,6 +53,13 @@ interface DataExplorerModalProps {
   selectedProject: Project;
   onClose: () => void;
 }
+
+const FIXED_ROWS = {
+  captions: 1,
+  images: 2,
+  videos: 3,
+  sounds: 4,
+};
 
 export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
   selectedProject,
@@ -59,6 +73,7 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
   const [visibleMedia, setVisibleMedia] = useState<Set<string>>(new Set());
   const [selectedArc, setSelectedArc] = useState<Arc | null>(null);
   const [addingScenes, setAddingScenes] = useState<Set<string>>(new Set());
+  const [fetchedScenes, setFetchedScenes] = useState<Set<string>>(new Set()); // Track fetched scenes
   const observerRef = useRef<IntersectionObserver | null>(null);
 
   const { addOverlay, overlays, durationInFrames } = useEditorContext();
@@ -75,6 +90,7 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
     if (!cache[selectedProject._id]) {
       const fetchProjectData = async () => {
         setLoading(true);
+        setError(null);
         try {
           const arcsData = await getApi.getArcs(selectedProject._id);
           const charactersData = await getApi.getCharacters(
@@ -117,7 +133,7 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
     }
   }, [cache, selectedProject._id, selectedArc]);
 
-  // Setup IntersectionObserver
+  // Setup IntersectionObserver for lazy loading media
   useEffect(() => {
     observerRef.current = new IntersectionObserver(
       (entries) => {
@@ -136,23 +152,50 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
     return () => observerRef.current?.disconnect();
   }, []);
 
-  // Fetch shots for a scene only if not cached
+  // Handle data refresh
+  const handleRefreshData = async () => {
+    setLoading(true);
+    setError(null);
+    setSelectedArc(null);
+    setVisibleMedia(new Set());
+    setAddingScenes(new Set());
+    setFetchedScenes(new Set());
+
+    // Clear cache for the current project
+    setCache((prev) => {
+      const updatedCache = { ...prev };
+      delete updatedCache[selectedProject._id];
+      delete globalCache[selectedProject._id];
+      return updatedCache;
+    });
+  };
+
+  // Fetch shots for a scene only if not cached or fetched
   const fetchShotsForScene = async (sceneId: string) => {
+    if (fetchedScenes.has(sceneId)) {
+      return;
+    }
+
     const existingShots = cache[selectedProject._id]?.shots || [];
     if (existingShots.some((shot) => shot.sceneId === sceneId)) {
       return;
     }
+
     try {
       const shotsData = await ltxApi.shots.getAll(sceneId);
       setCache((prev) => {
+        const currentProjectCache = prev[selectedProject._id] || {
+          arcs: [],
+          scenes: [],
+          shots: [],
+          characters: [],
+        };
         const updatedCache = {
           ...prev,
           [selectedProject._id]: {
-            ...prev[selectedProject._id],
+            ...currentProjectCache,
             shots: [
-              ...prev[selectedProject._id].shots.filter(
-                (s) => s.sceneId !== sceneId
-              ),
+              ...currentProjectCache.shots.filter((s) => s.sceneId !== sceneId),
               ...shotsData.data,
             ],
           },
@@ -160,8 +203,11 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
         globalCache[selectedProject._id] = updatedCache[selectedProject._id];
         return updatedCache;
       });
+      setFetchedScenes((prev) => new Set(prev).add(sceneId));
     } catch (err) {
-      setError("Failed to load shots for scene.");
+      console.error(`Failed to fetch shots for scene ${sceneId}:`, err);
+      setError(`Failed to load shots for scene: ${sceneId}`);
+      setFetchedScenes((prev) => new Set(prev).add(sceneId));
     }
   };
 
@@ -188,8 +234,8 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
       styles: {
         objectFit: "cover",
         animation: {
-          enter: "fadeIn",
-          exit: "fadeOut",
+          enter: "fade",
+          exit: "fade",
         },
       },
     };
@@ -224,6 +270,10 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
         zIndex: 100,
         transform: "none",
         objectFit: "cover",
+        animation: {
+          enter: "fade",
+          exit: "fade",
+        },
       },
     };
     addOverlay(newOverlay);
@@ -257,6 +307,113 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
     addOverlay(newSoundOverlay);
   };
 
+  // Create caption overlay (new)
+  const createCaptionOverlay = (
+    captions: Caption[],
+    position: { from: number; row: number },
+    durationInFrames: number
+  ) => {
+    const newCaptionOverlay: CaptionOverlay = {
+      id: Date.now() + Math.floor(Math.random() * 1000),
+      type: OverlayType.CAPTION,
+      from: position.from,
+      durationInFrames,
+      captions,
+      left: 230, // Default position from CaptionsPanel
+      top: 414,
+      width: 833,
+      height: 269,
+      rotation: 0,
+      isDragging: false,
+      row: FIXED_ROWS.videos, // Use single row
+    };
+    addOverlay(newCaptionOverlay);
+  };
+
+  const handleAddAllCaptionsForScene = async (
+    sceneId: string,
+    shots: ExtendedShot[]
+  ) => {
+    const key = `${sceneId}:captions`;
+    if (addingScenes.has(key) || shots.length === 0) return;
+
+    setAddingScenes((prev) => new Set(prev).add(key));
+
+    try {
+      // Filter shots with a description (or adjust to another field if needed)
+      const validCaptions = shots.filter((shot) => shot.voice_over);
+      if (validCaptions.length === 0) return;
+
+      // Find the last overlay's end time in the target row
+      const targetOverlays = overlays.filter(
+        (overlay) => overlay.row === FIXED_ROWS.captions
+      );
+      const lastEndFrame = targetOverlays.length
+        ? Math.max(...targetOverlays.map((o) => o.from + o.durationInFrames))
+        : 0;
+
+      // eslint-disable-next-line prefer-const
+      let currentFrom = lastEndFrame;
+      const captions: Caption[] = [];
+      let totalDurationMs = 0;
+
+      for (let i = 0; i < validCaptions.length; i++) {
+        const shot = validCaptions[i];
+        const durationSec =
+          shot.duration && shot.duration > 0
+            ? shot.duration
+            : DEFAULT_IMAGE_DURATION; // Use same default as images
+        const durationMs = durationSec * 1000;
+
+        // Split description into words for timing (mimicking CaptionsPanel)
+        const words = shot.voice_over.trim().split(/\s+/);
+        const wordsPerMinute = 160; // From CaptionsPanel
+        const msPerWord = (60 * 1000) / wordsPerMinute;
+
+        const processedWords = words.map((word, index) => ({
+          word,
+          startMs: totalDurationMs + index * msPerWord,
+          endMs: totalDurationMs + (index + 1) * msPerWord,
+          confidence: 0.99,
+        }));
+
+        const caption: Caption = {
+          text: shot.voice_over,
+          startMs: totalDurationMs,
+          endMs: totalDurationMs + durationMs,
+          timestampMs: null,
+          confidence: 0.99,
+          words: processedWords,
+        };
+
+        captions.push(caption);
+        totalDurationMs += durationMs;
+
+        if (i % 5 === 0 && i > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      }
+
+      // Calculate total duration in frames
+      const calculatedDurationInFrames = Math.ceil(
+        (totalDurationMs / 1000) * FRAMERATE
+      );
+
+      const position = {
+        from: currentFrom,
+        row: FIXED_ROWS.captions,
+      };
+
+      createCaptionOverlay(captions, position, calculatedDurationInFrames);
+    } finally {
+      setAddingScenes((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(key);
+        return newSet;
+      });
+    }
+  };
+
   // Add all images for a specific scene
   const handleAddAllImagesForScene = async (
     sceneId: string,
@@ -268,27 +425,18 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
     setAddingScenes((prev) => new Set(prev).add(key));
 
     try {
-      const initialPosition = findNextAvailablePosition(
-        overlays,
-        visibleRows,
-        durationInFrames
-      );
-
       const validImages = shots.filter((shot) => shot.imageUrl);
       if (validImages.length === 0) return;
 
-      // Calculate total duration in frames (for logging/debugging)
-      const totalDuration = validImages.reduce((sum, shot) => {
-        const durationSec =
-          shot.duration && shot.duration > 0
-            ? shot.duration
-            : DEFAULT_IMAGE_DURATION;
-        const frames = Math.round(durationSec * FRAMERATE);
+      // Find the last overlay's end time in the target row
+      const targetOverlays = overlays.filter(
+        (overlay) => overlay.row === FIXED_ROWS.images
+      );
+      const lastEndFrame = targetOverlays.length
+        ? Math.max(...targetOverlays.map((o) => o.from + o.durationInFrames))
+        : 0;
 
-        return sum + frames;
-      }, 0);
-
-      let currentFrom = initialPosition.from;
+      let currentFrom = lastEndFrame;
       for (let i = 0; i < validImages.length; i++) {
         const shot = validImages[i];
         const durationSec =
@@ -298,7 +446,7 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
         const durationInFrames = Math.round(durationSec * FRAMERATE);
         const position = {
           from: currentFrom,
-          row: initialPosition.row, // All images on the same row
+          row: FIXED_ROWS.images,
         };
         createImageOverlay(shot.imageUrl!, position, durationInFrames);
         currentFrom += durationInFrames;
@@ -327,29 +475,18 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
     setAddingScenes((prev) => new Set(prev).add(key));
 
     try {
-      const initialPosition = findNextAvailablePosition(
-        overlays,
-        visibleRows,
-        durationInFrames
-      );
-
       const validVideos = shots.filter((shot) => shot.videoUrl);
       if (validVideos.length === 0) return;
 
-      // Log shots to debug duration
+      // Find the last overlay's end time in the target row
+      const targetOverlays = overlays.filter(
+        (overlay) => overlay.row === FIXED_ROWS.videos
+      );
+      const lastEndFrame = targetOverlays.length
+        ? Math.max(...targetOverlays.map((o) => o.from + o.durationInFrames))
+        : 0;
 
-      // Calculate total duration in frames (for logging/debugging)
-      const totalDuration = validVideos.reduce((sum, shot) => {
-        const durationSec =
-          shot.duration && shot.duration > 0
-            ? shot.duration
-            : DEFAULT_VIDEO_SOUND_DURATION;
-        const frames = Math.round(durationSec * FRAMERATE);
-
-        return sum + frames;
-      }, 0);
-
-      let currentFrom = initialPosition.from;
+      let currentFrom = lastEndFrame;
       for (let i = 0; i < validVideos.length; i++) {
         const shot = validVideos[i];
         const durationSec =
@@ -359,7 +496,7 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
         const durationInFrames = Math.round(durationSec * FRAMERATE);
         const position = {
           from: currentFrom,
-          row: initialPosition.row, // All videos on the same row
+          row: FIXED_ROWS.videos,
         };
         createVideoOverlay(
           shot.videoUrl!,
@@ -393,27 +530,18 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
     setAddingScenes((prev) => new Set(prev).add(key));
 
     try {
-      const initialPosition = findNextAvailablePosition(
-        overlays,
-        visibleRows,
-        durationInFrames
-      );
-
       const validSounds = shots.filter((shot) => shot.audioUrl);
       if (validSounds.length === 0) return;
 
-      // Calculate total duration in frames (for logging/debugging)
-      const totalDuration = validSounds.reduce((sum, shot) => {
-        const durationSec =
-          shot.duration && shot.duration > 0
-            ? shot.duration
-            : DEFAULT_VIDEO_SOUND_DURATION;
-        const frames = Math.round(durationSec * FRAMERATE);
+      // Find the last overlay's end time in the target row
+      const targetOverlays = overlays.filter(
+        (overlay) => overlay.row === FIXED_ROWS.sounds
+      );
+      const lastEndFrame = targetOverlays.length
+        ? Math.max(...targetOverlays.map((o) => o.from + o.durationInFrames))
+        : 0;
 
-        return sum + frames;
-      }, 0);
-
-      let currentFrom = initialPosition.from;
+      let currentFrom = lastEndFrame;
       for (let i = 0; i < validSounds.length; i++) {
         const shot = validSounds[i];
         const durationSec =
@@ -423,7 +551,7 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
         const durationInFrames = Math.round(durationSec * FRAMERATE);
         const position = {
           from: currentFrom,
-          row: initialPosition.row, // All sounds on the same row
+          row: FIXED_ROWS.sounds,
         };
         createSoundOverlay(
           shot.audioUrl!,
@@ -445,7 +573,6 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
       });
     }
   };
-
   // Get data from cache or use empty arrays
   const arcs = cache[selectedProject._id]?.arcs || [];
   const scenes = cache[selectedProject._id]?.scenes || [];
@@ -499,14 +626,17 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
     }
   };
 
-  // Fetch shots for scenes that are not cached
+  // Fetch shots for scenes that are not cached or fetched
   useEffect(() => {
     filteredScenes.forEach((scene) => {
-      if (!groupedShots[`${scene.arcId}-${scene._id}`]) {
+      if (
+        !fetchedScenes.has(scene._id) &&
+        !groupedShots[`${scene.arcId}-${scene._id}`]
+      ) {
         fetchShotsForScene(scene._id);
       }
     });
-  }, [filteredScenes]);
+  }, [filteredScenes, fetchedScenes]);
 
   // Reset state when modal closes
   useEffect(() => {
@@ -514,33 +644,52 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
       setSelectedArc(null);
       setVisibleMedia(new Set());
       setAddingScenes(new Set());
+      setFetchedScenes(new Set());
     }
   }, [isOpen]);
 
   return (
     <Dialog open={isOpen} onOpenChange={() => onClose()}>
-      <DialogContent className="max-w-6xl h-[90vh] flex flex-col overflow-hidden p-4">
-        <DialogTitle>{selectedProject.title}</DialogTitle>
-        <div className="flex h-full">
+      <DialogContent
+        className="max-w-6xl h-[90vh] flex flex-col overflow-hidden p-4"
+        aria-describedby="api-data-modal"
+      >
+        <div className="flex justify-between items-center">
+          <DialogTitle>{selectedProject.title}</DialogTitle>
+          <Button
+            onClick={handleRefreshData}
+            variant="outline"
+            size="sm"
+            disabled={loading}
+            className="flex items-center gap-1.5"
+          >
+            <RefreshCcw className="h-4 w-4" />
+            Refresh Data
+            {loading && <Loader2 className="ml-1 h-4 w-4 animate-spin" />}
+          </Button>
+        </div>
+        <div className="flex h-full overflow-hidden">
           {/* Sidebar for Arcs */}
-          <div className="w-1/4 border-r p-4">
+          <div className="w-1/4 border-r p-4 flex flex-col">
             <h2 className="text-lg font-semibold mb-4">Arcs</h2>
             {error && <p className="text-red-500">{error}</p>}
-            <div className="flex flex-col h-96 overflow-y-auto">
-              {arcs.map((arc) => (
-                <p
-                  key={arc._id}
-                  className={`cursor-pointer rounded-md p-2 line-clamp-2 ${
-                    selectedArc?._id === arc._id
-                      ? "bg-primary text-primary-foreground shadow hover:bg-primary/90"
-                      : "hover:bg-accent hover:text-accent-foreground"
-                  }`}
-                  onClick={() => setSelectedArc(arc)}
-                >
-                  {arc.title}
-                </p>
-              ))}
-            </div>
+            <ScrollArea className="flex-1">
+              <div className="flex flex-col space-y-2">
+                {arcs.map((arc) => (
+                  <p
+                    key={arc._id}
+                    className={`cursor-pointer rounded-md p-2 line-clamp-2 ${
+                      selectedArc?._id === arc._id
+                        ? "bg-primary text-primary-foreground shadow hover:bg-primary/90"
+                        : "hover:bg-accent hover:text-accent-foreground"
+                    }`}
+                    onClick={() => setSelectedArc(arc)}
+                  >
+                    {arc.title}
+                  </p>
+                ))}
+              </div>
+            </ScrollArea>
           </div>
 
           {/* Main Content */}
@@ -635,6 +784,29 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
                                     <Loader2 className="ml-1 h-3 w-3 animate-spin" />
                                   )}
                                 </Button>
+                                <Button
+                                  onClick={() =>
+                                    handleAddAllCaptionsForScene(
+                                      scene._id,
+                                      group.shots
+                                    )
+                                  }
+                                  variant="outline"
+                                  size="sm"
+                                  disabled={
+                                    addingScenes.has(`${scene._id}:captions`) ||
+                                    !group.shots.some((shot) => shot.voice_over)
+                                  }
+                                  className="text-sm flex items-center gap-1.5"
+                                >
+                                  <Plus className="h-3 w-3" />
+                                  Add All Captions
+                                  {addingScenes.has(
+                                    `${scene._id}:captions`
+                                  ) && (
+                                    <Loader2 className="ml-1 h-3 w-3 animate-spin" />
+                                  )}
+                                </Button>
                               </div>
                             )}
                           </div>
@@ -704,75 +876,71 @@ export const DataExplorerModal: React.FC<DataExplorerModalProps> = ({
                       .filter(([arcId]) =>
                         selectedArc ? arcId === selectedArc._id : true
                       )
-                      .map(([arcId, chars], index) => {
-                        console.log(arcId);
-                        console.log(chars);
-                        return (
-                          <div key={index}>
-                            <h4 className="text-md font-medium">
-                              {arcId === "no-arc"
-                                ? "Multiple Arcs"
-                                : getArcTitle(arcId)}
-                            </h4>
-                            <ScrollArea className="w-full whitespace-nowrap">
-                              <div className="flex space-x-4 py-4 overflow-x-auto max-w-3xl">
-                                {chars
-                                  .filter((char) => char.imageUrl)
-                                  .map((char) => (
-                                    <Card
-                                      key={char._id}
-                                      className="w-[250px] flex-shrink-0"
-                                      ref={(el) => observeCard(el, char._id)}
-                                    >
-                                      <CardHeader>
-                                        <CardTitle className="text-sm">
-                                          {char.name}
-                                        </CardTitle>
-                                      </CardHeader>
-                                      <CardContent>
-                                        {char.imageUrl &&
-                                        visibleMedia.has(char._id) ? (
-                                          <Image
-                                            src={char.imageUrl}
-                                            alt={char.name}
-                                            width={100}
-                                            height={100}
-                                            className="w-full h-32 object-cover mb-2"
-                                            loading="lazy"
-                                          />
-                                        ) : (
-                                          <div className="w-full h-32 bg-gray-200 mb-2 flex items-center justify-center">
-                                            <Loader2 className="h-6 w-6 animate-spin" />
-                                          </div>
-                                        )}
-                                        <Button
-                                          variant="outline"
-                                          size="sm"
-                                          onClick={() => {
-                                            const position =
-                                              findNextAvailablePosition(
-                                                overlays,
-                                                visibleRows,
-                                                durationInFrames
-                                              );
-                                            createImageOverlay(
-                                              char.imageUrl || "",
-                                              position,
-                                              120
+                      .map(([arcId, chars]) => (
+                        <div key={arcId}>
+                          <h4 className="text-md font-medium">
+                            {arcId === "no-arc"
+                              ? "Multiple Arcs"
+                              : getArcTitle(arcId)}
+                          </h4>
+                          <ScrollArea className="w-full whitespace-nowrap">
+                            <div className="flex space-x-4 py-4 overflow-x-auto max-w-3xl">
+                              {chars
+                                .filter((char) => char.imageUrl)
+                                .map((char) => (
+                                  <Card
+                                    key={char._id}
+                                    className="w-[250px] flex-shrink-0"
+                                    ref={(el) => observeCard(el, char._id)}
+                                  >
+                                    <CardHeader>
+                                      <CardTitle className="text-sm">
+                                        {char.name}
+                                      </CardTitle>
+                                    </CardHeader>
+                                    <CardContent>
+                                      {char.imageUrl &&
+                                      visibleMedia.has(char._id) ? (
+                                        <Image
+                                          src={char.imageUrl}
+                                          alt={char.name}
+                                          width={100}
+                                          height={100}
+                                          className="w-full h-32 object-cover mb-2"
+                                          loading="lazy"
+                                        />
+                                      ) : (
+                                        <div className="w-full h-32 bg-gray-200 mb-2 flex items-center justify-center">
+                                          <Loader2 className="h-6 w-6 animate-spin" />
+                                        </div>
+                                      )}
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={() => {
+                                          const position =
+                                            findNextAvailablePosition(
+                                              overlays,
+                                              visibleRows,
+                                              durationInFrames
                                             );
-                                          }}
-                                          disabled={!char.imageUrl}
-                                        >
-                                          Add Image
-                                        </Button>
-                                      </CardContent>
-                                    </Card>
-                                  ))}
-                              </div>
-                            </ScrollArea>
-                          </div>
-                        );
-                      })}
+                                          createImageOverlay(
+                                            char.imageUrl || "",
+                                            position,
+                                            120
+                                          );
+                                        }}
+                                        disabled={!char.imageUrl}
+                                      >
+                                        Add Image
+                                      </Button>
+                                    </CardContent>
+                                  </Card>
+                                ))}
+                            </div>
+                          </ScrollArea>
+                        </div>
+                      ))}
                   </div>
                 )}
               </TabsContent>

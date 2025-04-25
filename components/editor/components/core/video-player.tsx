@@ -4,6 +4,12 @@ import { FPS } from "../../constants";
 import { useEditorContext } from "../../contexts/editor-context";
 import { Main } from "../../remotion/main";
 
+// Custom type for prefetch return value
+// interface PrefetchResult {
+//   waitUntilDone: () => Promise<string>;
+//   free: () => void;
+// }
+
 /**
  * Props for the VideoPlayer component
  * @interface VideoPlayerProps
@@ -30,6 +36,69 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ playerRef }) => {
     getAspectRatioDimensions,
     durationInFrames,
   } = useEditorContext();
+
+  // Lưu trữ tham chiếu đến các tài nguyên đã prefetch để quản lý và giải phóng
+  // const prefetchedResources = useRef<Map<string, PrefetchResult>>(new Map());
+
+  // /**
+  //  * Type guard to check if an overlay has an src property
+  //  */
+  // const hasSrc = (
+  //   overlay: Overlay
+  // ): overlay is ImageOverlay | ClipOverlay | SoundOverlay => {
+  //   return (
+  //     overlay.type === OverlayType.IMAGE ||
+  //     overlay.type === OverlayType.VIDEO ||
+  //     overlay.type === OverlayType.SOUND
+  //   );
+  // };
+
+  /**
+   * Preload all media resources (videos, images, audios) from overlays
+   */
+  // useEffect(() => {
+  //   const preloadResources = async () => {
+  //     // Lấy danh sách các src duy nhất từ overlays có src
+  //     const uniqueSrcs = new Set<string>(
+  //       overlays
+  //         .filter(hasSrc) // Chỉ lấy overlays có src
+  //         .map((overlay) => overlay.src)
+  //         .filter((src): src is string => !!src) // Loại bỏ undefined/null
+  //     );
+
+  //     // Preload mỗi tài nguyên
+  //     for (const src of Array.from(uniqueSrcs)) {
+  //       // Convert Set to Array
+  //       if (prefetchedResources.current.has(src)) continue;
+
+  //       try {
+  //         console.log(`Preloading resource: ${src}`);
+  //         const result = prefetch(src);
+  //         prefetchedResources.current.set(src, result);
+
+  //         // Theo dõi trạng thái preload
+  //         const blobUrl = await result.waitUntilDone();
+  //         console.log(
+  //           `Resource preloaded successfully: ${src}, Blob URL: ${blobUrl}`
+  //         );
+  //       } catch (error) {
+  //         console.error(`Failed to preload resource ${src}:`, error);
+  //       }
+  //     }
+  //   };
+
+  //   preloadResources();
+
+  //   // Cleanup: Giải phóng tài nguyên khi component unmount hoặc overlays thay đổi
+  //   return () => {
+  //     prefetchedResources.current.forEach((resource, src) => {
+  //       console.log(`Freeing prefetched resource: ${src}`);
+  //       resource.free();
+  //     });
+  //     // eslint-disable-next-line react-hooks/exhaustive-deps
+  //     prefetchedResources.current.clear();
+  //   };
+  // }, [overlays]);
 
   /**
    * Updates the player dimensions when the container size or aspect ratio changes
@@ -83,7 +152,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({ playerRef }) => {
             }}
           >
             <Player
-              controls
               ref={playerRef}
               className="w-full h-full"
               component={Main}

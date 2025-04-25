@@ -64,14 +64,16 @@ export const ImageSettingsPanel: React.FC<ImageSettingsPanelProps> = ({
                 animationKey={key}
                 animation={animation}
                 isSelected={localOverlay.styles.animation?.enter === key}
-                onClick={() =>
-                  handleStyleChange({
+                onClick={() => {
+                  console.log(key);
+                  console.log(localOverlay.styles.animation);
+                  return handleStyleChange({
                     animation: {
                       ...localOverlay.styles.animation,
                       enter: key,
                     },
-                  })
-                }
+                  });
+                }}
               />
             ))}
           </div>

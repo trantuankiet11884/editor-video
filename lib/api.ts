@@ -199,6 +199,7 @@ export interface Shot {
   sceneId: string;
   projectId: string;
   arcId: string;
+  content: string;
   type: string; // Renamed from title, e.g., "close-up, tight framing on face"
   prompt_i2v: string; // Renamed from description, e.g., "@vanitas_astrea’s face tightens..."
   prompt_t2i: string; // e.g., "@vanitas_astrea's face tense and conflicted..."
