@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import React from "react";
 import { Button } from "@/components/ui/button";
 import { Play, Pause, UploadCloud, Music } from "lucide-react";
@@ -154,11 +155,13 @@ const SoundsPanel: React.FC = () => {
       height: 100,
       rotation: 0,
       isDragging: false,
-      durationInFrames: sound.duration * 30, // 30fps
+      durationInFrames: Math.ceil(+sound.duration * 30), // 30fps
       styles: {
         opacity: 1,
       },
     };
+
+    console.log(newSoundOverlay);
 
     addOverlay(newSoundOverlay);
   };
